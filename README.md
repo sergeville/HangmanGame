@@ -27,9 +27,11 @@ If you have already built it, you can also run `./target/release/hangman_game` o
 - Type a letter or left-click a letter tile to guess it.
 - Correct guesses reveal every occurrence of that letter in the word. Incorrect guesses cost one life and reveal part of the figure.
 - You have six lives. Reveal the whole word to win; after six incorrect guesses, the word is shown and the round ends.
+- The chalkboard in the upper left shows your level, wins toward the next level, and lives left. During a duel it shows both players' lives, misses, and turns.
 - A letter you have already guessed does not cost another life. The letter tiles and status line show your progress.
 - Press **Enter** or click **New Game** to start another round. A win counts toward the current level. You advance after winning ten distinct words from that level's twenty-word pool. A loss or an unfinished round keeps you at the same level.
 - Press **Esc** or close the window to quit.
+- Press **F1** to open the in-game help screen with the rules and controls. Press **F1** or **Esc** to return to your round. The game pauses automatic turns while help is open.
 - Press **F2** or click **JeV Plays** to let JeV guess automatically; press it again to pause. With a local model configured, the button reads **Local AI Plays**.
 - Press **F3** or click **Odds Plays** to let the built-in probability solver guess automatically; press it again to pause.
 - Press **F4** or click **Odds vs JeV** twice to start a match. The first press shows the call limit; the second starts the match. With a local model configured, the button reads **Odds vs Local AI**.

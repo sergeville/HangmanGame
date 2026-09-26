@@ -6,7 +6,7 @@
 //! of the original image. winit for the window and input, softbuffer for the pixels.
 //!
 //! Type a letter or click a tile to guess, Enter (or the New Game plank) restarts, Esc quits.
-//! F2 starts and pauses JeV; F3 starts and pauses the local probability solver.
+//! F1 opens the help screen; F2 starts and pauses JeV; F3 starts and pauses the local solver.
 //! `HANGMAN_WORD=mango` fixes the first round for testing.
 
 mod jev;
@@ -303,6 +303,8 @@ const STATUS_NEUTRAL: u32 = 0x00_f7_e8_c0;
 const LEVEL_TEXT: u32 = 0x00_ff_f8_df;
 const PLANK_INK: u32 = 0x00_f2_d8_8c;
 const HINT_INK: u32 = 0x00_d9_a8_4a;
+const CHALK: u32 = 0x00_e8_e7_d9;
+const CHALK_DIM: u32 = 0x00_b8_c8_b7;
 
 // ---------------------------------------------------------------------------
 // Images
@@ -413,6 +415,7 @@ struct RenderState<'a> {
     solver_mode: &'a SolverMode,
     duel: Option<&'a Duel>,
     duel_armed: bool,
+    help_open: bool,
 }
 
 impl Renderer {
@@ -453,13 +456,20 @@ impl Renderer {
             solver_mode,
             duel,
             duel_armed,
+            help_open,
         } = state;
         let lay = Layout::fit(w, h);
         self.rebuild_backdrop(w, h, lay);
         buf.copy_from_slice(&self.backdrop);
         let mut c = Canvas { buf, w, h, lay };
 
+        if help_open {
+            self.draw_help(&mut c, jev_mode.is_local());
+            return;
+        }
+
         self.draw_man(&mut c, game);
+        self.draw_scoreboard(&mut c, game, duel, jev_mode.is_local());
 
         // plaque
         c.text_centred(TITLE.0, TITLE.1, 3.0, Ink::Gold, "HANGMAN");
@@ -474,29 +484,16 @@ impl Renderer {
             status
         };
         c.text_centred(STATUS.0, STATUS.1, 2.1, Ink::Contrast(color), &status);
-        let progress = if let Some(match_state) = duel {
-            let score = match_state.score_line(game);
-            if local {
-                score.replace("JEV", "LOCAL AI")
-            } else {
-                score
-            }
-        } else if duel_armed {
+        let message = if duel_armed {
             format!(
                 "DUEL READY - F4 AGAIN - MAX {} {} CALLS",
                 jev_mode.max_calls_in_round,
                 if local { "LOCAL AI" } else { "JEV" }
             )
-        } else if game.fixed {
+        } else if duel.is_none() && game.fixed {
             "PRACTICE: NEW GAME FOR RANDOM".to_string()
         } else {
-            format!(
-                "LEVEL {}/{}  WINS {}/{}",
-                game.level + 1,
-                word_bank::LEVELS,
-                game.completed_in_level(),
-                word_bank::WINS_TO_ADVANCE
-            )
+            String::new()
         };
         let auto_status = if duel.is_some() || duel_armed {
             ""
@@ -517,7 +514,7 @@ impl Renderer {
             105.0,
             1.9,
             Ink::Contrast(LEVEL_TEXT),
-            &format!("{progress}  {auto_status}"),
+            &format!("{message}  {auto_status}"),
         );
 
         if let Some(match_state) = duel {
@@ -615,10 +612,177 @@ impl Renderer {
             1.3,
             Ink::Flat(HINT_INK),
             if local {
-                "TYPE OR CLICK   ENTER: NEW GAME   F2: LOCAL AI   F3: ODDS   F4: DUEL   ESC: QUIT"
+                "TYPE OR CLICK   F1: HELP   ENTER: NEW GAME   F2: LOCAL AI   F3: ODDS   F4: DUEL   ESC: QUIT"
             } else {
-                "TYPE OR CLICK   ENTER: NEW GAME   F2: JEV   F3: ODDS   F4: DUEL   ESC: QUIT"
+                "TYPE OR CLICK   F1: HELP   ENTER: NEW GAME   F2: JEV   F3: ODDS   F4: DUEL   ESC: QUIT"
             },
+        );
+    }
+
+    fn draw_scoreboard(
+        &self,
+        c: &mut Canvas<'_>,
+        game: &HangmanGame,
+        duel: Option<&Duel>,
+        local: bool,
+    ) {
+        // A framed slate sits in the empty, upper-left part of the backdrop.
+        c.rect(26.0, 30.0, 328.0, 198.0, SHADOW);
+        c.rect(20.0, 24.0, 328.0, 198.0, 0x00_4a_2c_19);
+        c.rect(24.0, 28.0, 320.0, 190.0, 0x00_9c_6b_38);
+        c.rect(30.0, 34.0, 308.0, 178.0, 0x00_09_17_12);
+        c.rect(36.0, 80.0, 296.0, 2.0, CHALK_DIM);
+        c.text_centred(
+            184.0,
+            57.0,
+            3.1,
+            Ink::Flat(CHALK),
+            if duel.is_some() {
+                "DUEL SCORE"
+            } else {
+                "SCOREBOARD"
+            },
+        );
+
+        if let Some(match_state) = duel {
+            let sides = [
+                ("ODDS", &match_state.odds),
+                (if local { "LOCAL AI" } else { "JEV" }, game),
+            ];
+            for (i, (label, side)) in sides.into_iter().enumerate() {
+                let y = 91.0 + i as f32 * 56.0;
+                let outcome = if side.is_won() {
+                    "WIN"
+                } else if side.is_lost() {
+                    "LOSS"
+                } else {
+                    "PLAY"
+                };
+                c.text(
+                    43.0,
+                    y,
+                    2.6,
+                    &Ink::Flat(CHALK),
+                    &format!("{label}  {outcome}"),
+                );
+                c.text(
+                    43.0,
+                    y + 24.0,
+                    1.9,
+                    &Ink::Flat(CHALK_DIM),
+                    &format!(
+                        "LIVES {}  MISS {}  TURNS {}",
+                        side.lives,
+                        MAX_LIVES - side.lives,
+                        side.guessed.len()
+                    ),
+                );
+            }
+        } else {
+            c.text(
+                48.0,
+                94.0,
+                2.8,
+                &Ink::Flat(CHALK),
+                &format!("LEVEL  {} / {}", game.level + 1, word_bank::LEVELS),
+            );
+            c.text(
+                48.0,
+                128.0,
+                2.8,
+                &Ink::Flat(CHALK),
+                &format!(
+                    "WINS   {} / {}",
+                    game.completed_in_level(),
+                    word_bank::WINS_TO_ADVANCE
+                ),
+            );
+            c.text(
+                48.0,
+                162.0,
+                2.8,
+                &Ink::Flat(CHALK),
+                &format!("LIVES  {} / {}", game.lives, MAX_LIVES),
+            );
+            if game.fixed {
+                c.text(48.0, 195.0, 1.7, &Ink::Flat(CHALK_DIM), "PRACTICE ROUND");
+            }
+        }
+    }
+
+    fn draw_help(&self, c: &mut Canvas<'_>, local: bool) {
+        c.fill_rect(0.0, 0.0, IMG_W, IMG_H, [8, 7, 6, 238]);
+        c.rect(90.0, 64.0, 998.0, 768.0, 0x00_20_18_12);
+        c.rect(90.0, 64.0, 998.0, 4.0, GOLD_LO);
+        c.rect(90.0, 828.0, 998.0, 4.0, GOLD_LO);
+        c.rect(90.0, 64.0, 4.0, 768.0, GOLD_LO);
+        c.rect(1084.0, 64.0, 4.0, 768.0, GOLD_LO);
+
+        c.text_centred(589.0, 122.0, 5.0, Ink::Gold, "HOW TO PLAY");
+        c.text_centred(
+            589.0,
+            164.0,
+            2.2,
+            Ink::Flat(LEVEL_TEXT),
+            "HANGMAN RULES AND CONTROLS",
+        );
+        c.rect(145.0, 187.0, 888.0, 2.0, GOLD_LO);
+
+        c.text(157.0, 205.0, 3.0, &Ink::Gold, "RULES");
+        for (i, line) in [
+            "TYPE A-Z OR CLICK A LETTER TILE TO GUESS",
+            "A CORRECT LETTER REVEALS EVERY MATCH",
+            "A WRONG LETTER COSTS ONE OF 6 LIVES",
+            "REVEAL THE WORD BEFORE LIVES REACH 0",
+            "WIN 10 DIFFERENT WORDS TO ADVANCE A LEVEL",
+            "THERE ARE 10 LEVELS WITH 20 WORDS EACH",
+        ]
+        .iter()
+        .enumerate()
+        {
+            c.text(
+                157.0,
+                244.0 + i as f32 * 34.0,
+                2.8,
+                &Ink::Flat(LEVEL_TEXT),
+                line,
+            );
+        }
+
+        c.text(157.0, 464.0, 3.0, &Ink::Gold, "CONTROLS");
+        let model = if local { "LOCAL AI" } else { "JEV" };
+        let requirement = if local { "SERVER" } else { "API KEY" };
+        let controls = [
+            "F1     OPEN OR CLOSE THIS HELP".to_owned(),
+            "ENTER  NEW GAME OR LEAVE A DUEL".to_owned(),
+            format!("F2     {model} PLAYS / PAUSES - NEEDS {requirement}"),
+            "F3     ODDS PLAYS / PAUSES - NO NETWORK".to_owned(),
+            format!("F4     ODDS VS {model} - PRESS TWICE TO START"),
+            "ESC    CLOSE HELP; OUTSIDE HELP, QUIT".to_owned(),
+            "CLICK  LETTER TILES, NEW GAME OR MODE BUTTONS".to_owned(),
+        ];
+        for (i, line) in controls.iter().enumerate() {
+            c.text(
+                157.0,
+                502.0 + i as f32 * 34.0,
+                2.8,
+                &Ink::Flat(LEVEL_TEXT),
+                line,
+            );
+        }
+        c.text_centred(
+            589.0,
+            766.0,
+            2.2,
+            Ink::Gold,
+            "DUEL: SAME WORD; WIN, THEN FEWER MISSES AND TURNS",
+        );
+        c.text_centred(
+            589.0,
+            801.0,
+            2.5,
+            Ink::Flat(LEVEL_TEXT),
+            "PRESS F1 OR ESC TO RETURN TO YOUR GAME",
         );
     }
 
@@ -1094,24 +1258,6 @@ impl Duel {
         self.odds_stalled = true;
     }
 
-    fn score_line(&self, jev: &HangmanGame) -> String {
-        fn side(label: &str, game: &HangmanGame) -> String {
-            let state = if game.is_won() {
-                "WIN"
-            } else if game.is_lost() {
-                "LOSS"
-            } else {
-                "PLAY"
-            };
-            format!(
-                "{label} {state} {} MISS {} TURNS",
-                MAX_LIVES - game.lives,
-                game.guessed.len()
-            )
-        }
-        format!("{} / {}", side("ODDS", &self.odds), side("JEV", jev))
-    }
-
     fn status(&self, jev: &HangmanGame, jev_mode: &JeVMode) -> (String, u32) {
         if self.odds_stalled {
             return ("DUEL STOPPED: ODDS HAS NO CANDIDATES".into(), STATUS_BAD);
@@ -1367,6 +1513,8 @@ fn main() {
     let mut solver_mode = SolverMode::new();
     let mut duel: Option<Duel> = None;
     let mut duel_armed = false;
+    let mut help_open = false;
+    let mut held_jev_replies = Vec::new();
     let mut cursor: Option<PhysicalPosition<f64>> = None;
     if launch_mode.as_deref() == Some("--jev-auto") {
         jev_mode.toggle();
@@ -1379,6 +1527,10 @@ fn main() {
     event_loop
         .run(move |event, elwt| {
             if let Event::UserEvent(reply) = event {
+                if help_open {
+                    held_jev_replies.push(reply);
+                    return;
+                }
                 jev_mode.busy = false;
                 if !jev_mode.enabled || reply.round != jev_mode.round || reply.epoch != jev_mode.epoch {
                     start_jev_turn(&game, &mut jev_mode, &proxy);
@@ -1430,6 +1582,10 @@ fn main() {
                 return;
             }
             if let Event::AboutToWait = event {
+                if help_open {
+                    elwt.set_control_flow(ControlFlow::Wait);
+                    return;
+                }
                 if let Some(match_state) = duel.as_mut() {
                     if match_state.odds_ready_at.is_some_and(|ready_at| Instant::now() >= ready_at) {
                         match_state.step_odds();
@@ -1469,6 +1625,7 @@ fn main() {
                 WindowEvent::CursorLeft { .. } => cursor = None,
 
                 WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Left, .. } => {
+                    if help_open { return; }
                     let Some(pos) = cursor else { return };
                     let size = window.inner_size();
                     let lay = Layout::fit(size.width as usize, size.height as usize);
@@ -1522,6 +1679,18 @@ fn main() {
                     ..
                 } => {
                     let changed = match logical_key {
+                        Key::Named(NamedKey::F1) | Key::Named(NamedKey::Escape) if help_open => {
+                            help_open = false;
+                            for reply in held_jev_replies.drain(..) {
+                                let _ = proxy.send_event(reply);
+                            }
+                            true
+                        }
+                        Key::Named(NamedKey::F1) => {
+                            help_open = true;
+                            true
+                        }
+                        _ if help_open => false,
                         Key::Named(NamedKey::Escape) => {
                             elwt.exit();
                             false
@@ -1577,7 +1746,7 @@ fn main() {
                     surface.resize(w, h).expect("resize surface");
                     let mut buffer = surface.buffer_mut().expect("lock buffer");
                     renderer.render(RenderState { game: &game, jev_mode: &jev_mode,
-                        solver_mode: &solver_mode, duel: duel.as_ref(), duel_armed },
+                        solver_mode: &solver_mode, duel: duel.as_ref(), duel_armed, help_open },
                         &mut buffer, size.width as usize, size.height as usize);
                     buffer.present().expect("present buffer");
                 }
@@ -1899,6 +2068,7 @@ mod tests {
                     solver_mode: &solver_mode,
                     duel: None,
                     duel_armed: false,
+                    help_open: false,
                 },
                 &mut buf,
                 w,
@@ -1915,6 +2085,7 @@ mod tests {
                 solver_mode: &solver_mode,
                 duel: None,
                 duel_armed: false,
+                help_open: false,
             },
             &mut before,
             w,
@@ -1929,6 +2100,7 @@ mod tests {
                 solver_mode: &solver_mode,
                 duel: None,
                 duel_armed: false,
+                help_open: false,
             },
             &mut after,
             w,
@@ -1946,11 +2118,28 @@ mod tests {
                 solver_mode: &solver_mode,
                 duel: Some(&duel),
                 duel_armed: false,
+                help_open: false,
             },
             &mut match_pixels,
             w,
             h,
         );
         assert_ne!(after, match_pixels);
+
+        let mut help_pixels = vec![0u32; w * h];
+        r.render(
+            RenderState {
+                game: &g,
+                jev_mode: &mode,
+                solver_mode: &solver_mode,
+                duel: Some(&duel),
+                duel_armed: false,
+                help_open: true,
+            },
+            &mut help_pixels,
+            w,
+            h,
+        );
+        assert_ne!(help_pixels, match_pixels);
     }
 }
