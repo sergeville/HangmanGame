@@ -141,39 +141,48 @@ Press **F2** for **Local AI Plays** or **F4** twice for **Odds vs Local AI**. In
 
 ### Laya with Docker
 
-The [Laya Docker guide](https://github.com/NandhaKishorM/laya/blob/main/docs/docker.md) includes a one-shot sample and a separate HTTP service. The sample exits after printing a JSON response; Hangman needs the HTTP service. For first-time setup, run these commands from the HangmanGame directory. If `.local-ai/laya` already exists, skip the clone and sample lines:
+Hangman can talk to Laya only while Laya's server is running. The [official Docker guide](https://github.com/NandhaKishorM/laya/blob/main/docs/docker.md) has a sample that runs once and stops, plus a server that stays ready for Hangman. If you have already set up Laya and `curl -sS http://127.0.0.1:8010/health` says `"status":"ok"`, skip to [See each local AI step](#see-each-local-ai-step).
+
+For a first setup, open Terminal and run these lines in order. If `.local-ai/laya` already exists, skip the `git clone` line:
 
 ```sh
+cd ~/Dev/HangmanGame
+mkdir -p .local-ai
 git clone --depth 1 https://github.com/NandhaKishorM/laya.git .local-ai/laya
 cd .local-ai/laya
-docker compose run --build --rm laya
 LAYA_PORT=8010 docker compose -f compose.yaml -f compose.http.yaml up --build -d --wait laya-serve
 curl -sS http://127.0.0.1:8010/health
 cd ../..
-HANGMAN_LOCAL_MODEL_PORT=8010 HANGMAN_LOCAL_MODEL_NAME=english cargo run --release --locked
-```
-
-The first sample downloads Laya's public checkpoint into a persistent Docker volume; no Hugging Face account, TypeSafe key, or Laya key is needed. The health response should include `"status":"ok"`. Press **F2** for Laya to play or **F4** twice for Odds vs Laya. Port 8010 avoids the port 8000 service already running on this Mac. Docker binds the published port to host loopback by default; on Apple Silicon, this Docker image runs on CPU rather than using macOS Metal. The `.local-ai/laya` clone is ignored by this repository.
-
-For a one-turn connection check instead of opening the game, run from HangmanGame:
-
-```sh
-HANGMAN_LOCAL_MODEL_PORT=8010 HANGMAN_LOCAL_MODEL_NAME=english HANGMAN_WORD=CASTLE cargo run --release --locked -- --jev-once
-```
-
-One local test returned `Local AI model=laya-rl-agent model_pick=J letter=J api_ms=3406 ... hit=false ... lives=5`. The HTTP request succeeded, but `J` missed `CASTLE`; one turn says nothing about Laya's overall Hangman performance. The model's Choice probability is its preference among letters, not its chance of a hit. Laya also warned that this checkpoint's confidence calibration needs care. To stop the service while keeping its downloaded weights, run `docker compose -f compose.yaml -f compose.http.yaml down` from `.local-ai/laya`.
-
-### See each local AI step
-
-For a beginner-friendly trace, run this one command from the HangmanGame directory. The script sets the three local settings and starts the game; keep its Terminal visible while playing:
-
-```sh
 ./run-laya-trace.sh
 ```
 
-Press **F2** to let Laya play. The Terminal trace follows four steps: **1** Hangman connects to the selected local address and sends visible clues; **2** the server replies with a model choice, reported preferences, and request time; **3** Hangman checks the choice against possible words and explains whether it kept or changed the letter; **4** the board shows the hit or miss, new pattern, and lives. It also shows the round and request number. The model preferences rank letters; they are not chances of hitting the word. Laya's API does not return its internal reasoning, so the trace explains Hangman's visible decision rule, not Laya's hidden calculations. The trace does not print the secret word, API key, or full request and response bodies.
+`git clone` downloads Laya's code. The `docker compose` line starts its server. The first model request downloads the model files, so the first guess can take longer; Docker keeps those files for later runs. The `curl` line checks that the server is accepting requests; look for `"status":"ok"`. The final line starts Hangman with tracing on; press **F2** for Laya to play or **F4** twice for Odds vs Laya. This setup needs no Hugging Face account or API key. Port 8010 is used because another service on this Mac uses 8000. By default, only this Mac can connect to the Docker server. On Apple Silicon, Docker runs this model on the CPU. The `.local-ai/laya` folder is ignored by this repository.
 
-For example, one normal round showed Laya choosing `A`. Four of seven possible words contained `A`, but five contained `E`, so Hangman used `E` and revealed a letter:
+The guide's optional sample command, `docker compose run --build --rm laya`, tries Laya once and exits. It does not leave a server running for Hangman.
+
+In one test, Hangman reached Laya, which chose `J` for `CASTLE`. `J` missed, so one life was lost. This shows that the connection works; one guess cannot tell us how good Laya is at Hangman. Laya also warned that its confidence numbers may not be reliable. To stop Laya but keep its downloaded model files, run `docker compose -f compose.yaml -f compose.http.yaml down` from `.local-ai/laya`.
+
+### See each local AI step
+
+Open **Terminal** and paste these two lines. Do not type a `$` prompt if Terminal shows one:
+
+```sh
+cd ~/Dev/HangmanGame
+./run-laya-trace.sh
+```
+
+When the game window opens, press **F2**. Keep Terminal visible next to the game. You will see a new group of lines for every AI guess.
+
+Here is what those lines mean:
+
+| Trace line | What happened |
+| --- | --- |
+| **1/4 Hangman connects** | Hangman contacts Laya at `127.0.0.1:8010`. `127.0.0.1` means **this computer**; `8010` is the number used to find Laya's server. The next line shows the clues it sends, such as the visible letter pattern, letters already tried, and lives left. |
+| **2/4 Server replied** | Laya answered. `HTTP 200` means the connection worked. The time in `ms` is milliseconds; `1000 ms` is one second. `chose=A` means Laya suggested `A`. |
+| **3/4 Word-list check** | Hangman checks which letters occur in the words still possible from the visible clues. It says which letter it will use and **why**. In a practice round with a fixed word, it leaves Laya's choice alone. |
+| **4/4 Board updated** | The chosen letter was tried. `hit` reveals a letter; `miss` costs a life. The line shows the pattern and lives after the guess. |
+
+For example, one round had **seven possible words**. Laya chose `A`. Four of those words contained `A`, while five contained `E`. Hangman therefore tried `E` and revealed a letter:
 
 ```text
 [AI TRACE 2/4] Server replied HTTP 200 in 887 ms: model="laya-rl-agent" chose="A" ...
@@ -182,9 +191,11 @@ For example, one normal round showed Laya choosing `A`. Four of seven possible w
 [AI TRACE 4/4] Board updated: letter=E hit pattern=_____ -> _E___ lives=6 (round continues)
 ```
 
-For a single traced turn without opening the window, run `./run-laya-trace.sh -- --jev-once`. To use a repeatable practice word, run `HANGMAN_WORD=CASTLE ./run-laya-trace.sh -- --jev-once`. Fixed practice words skip Hangman's word-list correction because dictionary frequencies may not describe a manually chosen word. Tracing is off for normal `cargo run` launches unless you set `HANGMAN_TRACE=1` yourself.
+The `model_preferences` numbers show which letters Laya favors. They do **not** tell you the chance of hitting the word. Laya sends back its choice and those numbers, but it does not explain how it reached its choice. The **Why** line explains Hangman's own rule for keeping or changing that choice. The trace never prints the secret word or an API key.
 
-To see Laya's own HTTP service messages in another Terminal, run `docker compose -f compose.yaml -f compose.http.yaml logs --follow --tail=50 laya-serve` from `.local-ai/laya`. **Ctrl-C** stops watching the logs; it does not stop the service.
+To see just **one** AI guess in Terminal without opening the game window, run `./run-laya-trace.sh -- --jev-once`. Tracing is off when you start the game with plain `cargo run --release --locked`.
+
+If the trace says **Connection failed**, first check whether Laya is running with `curl -sS http://127.0.0.1:8010/health`. A working server replies with `"status":"ok"`. For Laya's own server messages, go to `.local-ai/laya` in another Terminal and run `docker compose -f compose.yaml -f compose.http.yaml logs --follow --tail=50 laya-serve`. Press **Ctrl-C** to stop watching those messages; Laya keeps running.
 
 ### API keys
 
