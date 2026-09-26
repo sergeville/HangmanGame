@@ -44,9 +44,13 @@ HANGMAN_WORD=MANGO cargo run --release --locked
 
 ## Words and difficulty
 
-The game bundles 200 distinct English words, twenty per level, so normal play works offline. The original 100 words were checked against the [English-word-frequencies list](https://github.com/brekker23/English-word-frequencies), which counts words in public-domain books. See [WORD_LIST_LICENSE](WORD_LIST_LICENSE) for its Apache 2.0 license. The added 100 words were hand-curated for variety and letter difficulty. The levels are approximate; actual Hangman difficulty also depends on your guesses.
+The game bundles 200 distinct English words, twenty per level, so normal play works offline. The original 100 words were checked against the [English-word-frequencies list](https://github.com/brekker23/English-word-frequencies), which counts words in public-domain books. The added 100 words were hand-curated for variety and letter difficulty. The levels are approximate; actual Hangman difficulty also depends on your guesses.
 
 You start at level 1. The screen shows your level and wins toward the ten-win goal. Each level draws from twenty words, and won words are removed from that level's draw. After a loss, **New Game** chooses a different unsolved word at the same level. Win ten distinct words to reach the next level. Finishing level 10 completes the 100-win challenge; **New Game** then restarts at level 1. Progress lasts for the current app session and starts again at level 1 after you quit.
+
+### Word-list source and licensing
+
+[WORD_LIST_LICENSE](WORD_LIST_LICENSE) contains the Apache 2.0 license text from the English-word-frequencies source used to check the original word list. It records that source's license; it does not license this game's Rust code. No project-wide code license has been chosen or added. GitHub may display an Apache-2.0 badge because it detects the standalone license text, so that badge should not be read as a license for the whole project.
 
 ## Let the probability solver play
 
