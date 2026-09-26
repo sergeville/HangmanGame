@@ -1401,6 +1401,14 @@ fn start_jev_turn(game: &HangmanGame, mode: &mut JeVMode, proxy: &EventLoopProxy
     mode.busy = true;
     mode.calls_in_round += 1;
     mode.status = "JEV THINKING".into();
+    if jev::trace_enabled() {
+        eprintln!(
+            "[AI TRACE] Starting round {} request {} of {}",
+            mode.round + 1,
+            mode.calls_in_round,
+            mode.max_calls_in_round
+        );
+    }
     std::thread::spawn(move || {
         let started = Instant::now();
         let result = jev::choose_letter(&api_key, &endpoint, &model, snapshot);
@@ -1426,6 +1434,26 @@ fn solver_comparison(analysis: &solver::Analysis, letter: char) -> String {
     }
 }
 
+fn trace_ai_game_result(game: &HangmanGame, before: &str, letter: char) {
+    if !jev::trace_enabled() {
+        return;
+    }
+    let hit = game.last.is_some_and(|(last, hit)| last == letter && hit);
+    let result = if game.is_won() {
+        "word solved"
+    } else if game.is_lost() {
+        "no lives left"
+    } else {
+        "round continues"
+    };
+    eprintln!(
+        "[AI TRACE 4/4] Board updated: letter={letter} {} pattern={before} -> {} lives={} ({result})",
+        if hit { "hit" } else { "miss" },
+        game.display(),
+        game.lives,
+    );
+}
+
 fn run_jev_once() -> Result<(), String> {
     let local = local_model_from_env().map_err(str::to_owned)?;
     let local_run = local.is_some();
@@ -1440,12 +1468,16 @@ fn run_jev_once() -> Result<(), String> {
     let mut game = HangmanGame::new();
     let before = game.display();
     let analysis = solver::analyze(&before, &game.guessed, game.solver_words());
+    if jev::trace_enabled() {
+        eprintln!("[AI TRACE] Starting one-turn connection test");
+    }
     let started = Instant::now();
     let decision =
         jev::choose_letter(&api_key, &endpoint, &model, jev::Snapshot::from_game(&game))?;
     let api_ms = started.elapsed().as_millis();
     let hit = game.word.contains(decision.letter);
     game.handle_guess(decision.letter);
+    trace_ai_game_result(&game, &before, decision.letter);
     println!("{} model={} model_pick={} letter={} api_ms={} model_choice_probability={:.3} {} hit={} pattern={} -> {} lives={} tokens={}/{}",
         if local_run { "Local AI" } else { "JeV" },
         decision.model, decision.model_letter, decision.letter, api_ms, decision.probability,
@@ -1539,9 +1571,11 @@ fn main() {
                     let api_ms = reply.elapsed.as_millis();
                     jev_mode.last_api_ms = Some(api_ms);
                     jev_mode.api_total_ms += api_ms;
-                    let analysis = solver::analyze(&game.display(), &game.guessed, game.solver_words());
+                    let before = game.display();
+                    let analysis = solver::analyze(&before, &game.guessed, game.solver_words());
                     match reply.result {
                         Ok(decision) if game.handle_guess(decision.letter) => {
+                            trace_ai_game_result(&game, &before, decision.letter);
                             eprintln!("{} round={} call={} model={} model_pick={} letter={} api_ms={} model_choice_probability={:.3} {} tokens={}/{}",
                                 provider, jev_mode.round + 1, jev_mode.calls_in_round, decision.model,
                                 decision.model_letter, decision.letter, api_ms, decision.probability,

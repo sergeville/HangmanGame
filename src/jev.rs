@@ -5,7 +5,7 @@ use serde_json::{json, Map, Value};
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::sync::OnceLock;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 pub const ENDPOINT: &str = "https://api.typesafe.ai/v1/systemone";
 static HTTP_AGENT: OnceLock<ureq::Agent> = OnceLock::new();
@@ -57,6 +57,7 @@ impl LetterQuality {
 
 struct LocalAdvice {
     quality: BTreeMap<char, LetterQuality>,
+    candidate_count: usize,
     best_letter: char,
     best_quality: LetterQuality,
 }
@@ -122,6 +123,7 @@ impl LocalAdvice {
         let (best_letter, best_quality) = best?;
         Some(Self {
             quality,
+            candidate_count: candidates.len(),
             best_letter,
             best_quality,
         })
@@ -211,6 +213,90 @@ pub struct Decision {
     pub output_tokens: u64,
 }
 
+pub(crate) fn trace_enabled() -> bool {
+    std::env::var("HANGMAN_TRACE").is_ok_and(|value| value == "1")
+}
+
+fn trace_request(snapshot: &Snapshot, endpoint: &str, model: &str) {
+    let state = &snapshot.state;
+    let candidates = state["candidate_words"]
+        .as_array()
+        .map_or("not sent".to_owned(), |words| words.len().to_string());
+    eprintln!("[AI TRACE 1/4] Hangman connects to {endpoint} and requests model {model}");
+    eprintln!(
+        "[AI TRACE] Clues sent: pattern={} guessed={} wrong={} lives={} available_letters={} candidate_words={candidates}",
+        state["word_pattern"],
+        state["guessed_letters"],
+        state["wrong_letters"],
+        state["wrong_guesses_remaining"],
+        snapshot.available.len(),
+    );
+}
+
+fn trace_response(body: &Value, status: u16, elapsed: Duration) {
+    let mut choices: Vec<(&str, f64)> = body["answers"]["next_letter"]["probabilities"]
+        .as_object()
+        .into_iter()
+        .flat_map(|probabilities| probabilities.iter())
+        .filter_map(|(letter, probability)| Some((letter.as_str(), probability.as_f64()?)))
+        .collect();
+    choices.sort_by(|a, b| b.1.total_cmp(&a.1));
+    let top_choices = choices
+        .iter()
+        .take(5)
+        .map(|(letter, probability)| format!("{letter}:{probability:.3}"))
+        .collect::<Vec<_>>()
+        .join(",");
+    eprintln!(
+        "[AI TRACE 2/4] Server replied HTTP {status} in {} ms: model={} chose={} model_preferences=[{top_choices}] tokens={}/{} (preferences are not hit chances)",
+        elapsed.as_millis(),
+        body["model"],
+        body["answers"]["next_letter"]["choice"],
+        body["usage"]["input_tokens"],
+        body["usage"]["output_tokens"],
+    );
+}
+
+fn trace_local_rule(snapshot: &Snapshot, decision: &Decision) {
+    if let Some(advice) = &snapshot.local_advice {
+        let picked = advice.quality[&decision.model_letter];
+        let reason = if decision.letter == decision.model_letter {
+            "kept the model's letter because no word-list option has a better result"
+        } else if picked.hits < advice.best_quality.hits {
+            "changed the letter because it appears in more possible words"
+        } else if picked.projected_wins < advice.best_quality.projected_wins {
+            "changed the letter because the lookahead predicts more wins"
+        } else if picked.projected_misses > advice.best_quality.projected_misses {
+            "changed the letter because the lookahead predicts fewer misses"
+        } else {
+            "changed the letter because the lookahead predicts fewer turns"
+        };
+        eprintln!(
+            "[AI TRACE 3/4] Word-list check: {} possible words; model's {} appears in {}/{}; best {} appears in {}/{}; Hangman uses {}",
+            advice.candidate_count,
+            decision.model_letter,
+            picked.hits,
+            advice.candidate_count,
+            advice.best_letter,
+            advice.best_quality.hits,
+            advice.candidate_count,
+            decision.letter,
+        );
+        eprintln!("[AI TRACE] Why: {reason}.");
+    } else {
+        let reason = if snapshot.state.get("candidate_words").is_none() {
+            "this is a fixed practice word, so dictionary frequencies could mislead"
+        } else {
+            "no built-in words match the visible clues"
+        };
+        eprintln!(
+            "[AI TRACE 3/4] Hangman uses {} without changing it",
+            decision.letter
+        );
+        eprintln!("[AI TRACE] Why: {reason}.");
+    }
+}
+
 fn parse_decision(body: &Value, available: &[char]) -> Result<Decision, &'static str> {
     let answer = &body["answers"]["next_letter"];
     if answer["type"] != "choice" {
@@ -244,26 +330,69 @@ pub fn choose_letter(
     model: &str,
     snapshot: Snapshot,
 ) -> Result<Decision, String> {
+    let trace = trace_enabled();
+    if trace {
+        trace_request(&snapshot, endpoint, model);
+    }
     let agent = if endpoint == ENDPOINT {
         http_agent()
     } else {
         local_http_agent()
     };
+    let started = Instant::now();
     let response = agent
         .post(endpoint)
         .set("Authorization", &format!("Bearer {api_key}"))
         .send_json(snapshot.payload(model));
     let response = match response {
         Ok(response) => response,
-        Err(ureq::Error::Status(code, _)) => return Err(format!("HTTP {code}")),
-        Err(ureq::Error::Transport(_)) => return Err("NETWORK ERROR".into()),
+        Err(ureq::Error::Status(code, _)) => {
+            if trace {
+                eprintln!(
+                    "[AI TRACE 2/4] Server replied HTTP {code} after {} ms",
+                    started.elapsed().as_millis()
+                );
+            }
+            return Err(format!("HTTP {code}"));
+        }
+        Err(ureq::Error::Transport(error)) => {
+            if trace {
+                eprintln!(
+                    "[AI TRACE 2/4] Connection failed after {} ms: {error}",
+                    started.elapsed().as_millis()
+                );
+            }
+            return Err("NETWORK ERROR".into());
+        }
     };
-    let body: Value = response.into_json().map_err(|_| "BAD JSON RESPONSE")?;
-    let mut decision = parse_decision(&body, &snapshot.available).map_err(str::to_owned)?;
+    let status = response.status();
+    let body: Value = response.into_json().map_err(|_| {
+        if trace {
+            eprintln!("[AI TRACE] Hangman could not read the server's JSON response");
+        }
+        "BAD JSON RESPONSE"
+    })?;
+    if trace {
+        trace_response(&body, status, started.elapsed());
+    }
+    let mut decision = parse_decision(&body, &snapshot.available).map_err(|error| {
+        if trace {
+            eprintln!("[AI TRACE 3/4] Hangman rejected the server's choice: {error}");
+        }
+        error.to_owned()
+    })?;
     if endpoint != ENDPOINT {
         if let Some(advice) = &snapshot.local_advice {
             advice.apply(&mut decision);
         }
+        if trace {
+            trace_local_rule(&snapshot, &decision);
+        }
+    } else if trace {
+        eprintln!(
+            "[AI TRACE 3/4] Hangman uses {} without a local word-list correction (hosted JeV)",
+            decision.letter
+        );
     }
     Ok(decision)
 }

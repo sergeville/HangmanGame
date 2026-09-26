@@ -163,6 +163,29 @@ HANGMAN_LOCAL_MODEL_PORT=8010 HANGMAN_LOCAL_MODEL_NAME=english HANGMAN_WORD=CAST
 
 One local test returned `Local AI model=laya-rl-agent model_pick=J letter=J api_ms=3406 ... hit=false ... lives=5`. The HTTP request succeeded, but `J` missed `CASTLE`; one turn says nothing about Laya's overall Hangman performance. The model's Choice probability is its preference among letters, not its chance of a hit. Laya also warned that this checkpoint's confidence calibration needs care. To stop the service while keeping its downloaded weights, run `docker compose -f compose.yaml -f compose.http.yaml down` from `.local-ai/laya`.
 
+### See each local AI step
+
+For a beginner-friendly trace, run this one command from the HangmanGame directory. The script sets the three local settings and starts the game; keep its Terminal visible while playing:
+
+```sh
+./run-laya-trace.sh
+```
+
+Press **F2** to let Laya play. The Terminal trace follows four steps: **1** Hangman connects to the selected local address and sends visible clues; **2** the server replies with a model choice, reported preferences, and request time; **3** Hangman checks the choice against possible words and explains whether it kept or changed the letter; **4** the board shows the hit or miss, new pattern, and lives. It also shows the round and request number. The model preferences rank letters; they are not chances of hitting the word. Laya's API does not return its internal reasoning, so the trace explains Hangman's visible decision rule, not Laya's hidden calculations. The trace does not print the secret word, API key, or full request and response bodies.
+
+For example, one normal round showed Laya choosing `A`. Four of seven possible words contained `A`, but five contained `E`, so Hangman used `E` and revealed a letter:
+
+```text
+[AI TRACE 2/4] Server replied HTTP 200 in 887 ms: model="laya-rl-agent" chose="A" ...
+[AI TRACE 3/4] Word-list check: 7 possible words; model's A appears in 4/7; best E appears in 5/7; Hangman uses E
+[AI TRACE] Why: changed the letter because it appears in more possible words.
+[AI TRACE 4/4] Board updated: letter=E hit pattern=_____ -> _E___ lives=6 (round continues)
+```
+
+For a single traced turn without opening the window, run `./run-laya-trace.sh -- --jev-once`. To use a repeatable practice word, run `HANGMAN_WORD=CASTLE ./run-laya-trace.sh -- --jev-once`. Fixed practice words skip Hangman's word-list correction because dictionary frequencies may not describe a manually chosen word. Tracing is off for normal `cargo run` launches unless you set `HANGMAN_TRACE=1` yourself.
+
+To see Laya's own HTTP service messages in another Terminal, run `docker compose -f compose.yaml -f compose.http.yaml logs --follow --tail=50 laya-serve` from `.local-ai/laya`. **Ctrl-C** stops watching the logs; it does not stop the service.
+
 ### API keys
 
 | Model | Key for this setup |
