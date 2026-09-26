@@ -1,0 +1,16 @@
+[package]
+name = "hangman_game"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+winit = "0.29"
+softbuffer = "0.4"
+rand = "0.8"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+serde_json = "1.0"
+ureq = { version = "2.12", default-features = false, features = ["json", "tls"] }
+
+# Software rendering of a 1178x896 photo at Retina size: keep the dev build usable.
+[profile.dev]
+opt-level = 2
