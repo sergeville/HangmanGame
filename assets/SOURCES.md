@@ -1,5 +1,8 @@
 # Assets
 
+The reference `hangman.jpeg` was generated with OpenAI. The three game assets
+below are edits of that reference image.
+
 Derived from `~/Dev/HTML/hangman.jpeg` (Serge's reference render) by
 `~/Dev/HTML/hangman-assets/build_assets.py` on 2026-09-06:
 
