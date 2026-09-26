@@ -121,6 +121,7 @@ The game selects the provider when it starts:
 | --- | --- | --- |
 | Neither local model variable is set | `https://api.typesafe.ai/v1/systemone` | Hosted TypeSafe JeV, using your API key |
 | `HANGMAN_LOCAL_MODEL_PORT=8009` | `http://127.0.0.1:8009/v1/systemone` | The model served on that port; `kev-latest` selects the local Kev model below |
+| `HANGMAN_LOCAL_MODEL_PORT=8010` | `http://127.0.0.1:8010/v1/systemone` | The Docker Laya server below; `english` selects its English checkpoint |
 
 Setting `HANGMAN_LOCAL_MODEL_NAME` without a port is a configuration error; it does not switch to the hosted service.
 
@@ -138,6 +139,30 @@ HANGMAN_LOCAL_MODEL_PORT=8009 HANGMAN_LOCAL_MODEL_NAME=kev-latest cargo run --re
 
 Press **F2** for **Local AI Plays** or **F4** twice for **Odds vs Local AI**. In local mode the game sends requests only to `127.0.0.1` at the selected port. It sends a placeholder local key, never reads the TypeSafe key, and never falls back to the hosted endpoint if the local server is down or the configuration is invalid. The default model name is `jev-latest`, which LocalJev accepts as an alias; use `HANGMAN_LOCAL_MODEL_NAME=kev-latest` for Kev. The 26-call round limit still applies. Kev-0.8B uses no TypeSafe requests. Other local servers may have their own upstream connections. The first request may take longer while the local model loads. Keep the server Terminal open while playing; closing it stops the local endpoint.
 
+### Laya with Docker
+
+The [Laya Docker guide](https://github.com/NandhaKishorM/laya/blob/main/docs/docker.md) includes a one-shot sample and a separate HTTP service. The sample exits after printing a JSON response; Hangman needs the HTTP service. For first-time setup, run these commands from the HangmanGame directory. If `.local-ai/laya` already exists, skip the clone and sample lines:
+
+```sh
+git clone --depth 1 https://github.com/NandhaKishorM/laya.git .local-ai/laya
+cd .local-ai/laya
+docker compose run --build --rm laya
+LAYA_PORT=8010 docker compose -f compose.yaml -f compose.http.yaml up --build -d --wait laya-serve
+curl -sS http://127.0.0.1:8010/health
+cd ../..
+HANGMAN_LOCAL_MODEL_PORT=8010 HANGMAN_LOCAL_MODEL_NAME=english cargo run --release --locked
+```
+
+The first sample downloads Laya's public checkpoint into a persistent Docker volume; no Hugging Face account, TypeSafe key, or Laya key is needed. The health response should include `"status":"ok"`. Press **F2** for Laya to play or **F4** twice for Odds vs Laya. Port 8010 avoids the port 8000 service already running on this Mac. Docker binds the published port to host loopback by default; on Apple Silicon, this Docker image runs on CPU rather than using macOS Metal. The `.local-ai/laya` clone is ignored by this repository.
+
+For a one-turn connection check instead of opening the game, run from HangmanGame:
+
+```sh
+HANGMAN_LOCAL_MODEL_PORT=8010 HANGMAN_LOCAL_MODEL_NAME=english HANGMAN_WORD=CASTLE cargo run --release --locked -- --jev-once
+```
+
+One local test returned `Local AI model=laya-rl-agent model_pick=J letter=J api_ms=3406 ... hit=false ... lives=5`. The HTTP request succeeded, but `J` missed `CASTLE`; one turn says nothing about Laya's overall Hangman performance. The model's Choice probability is its preference among letters, not its chance of a hit. Laya also warned that this checkpoint's confidence calibration needs care. To stop the service while keeping its downloaded weights, run `docker compose -f compose.yaml -f compose.http.yaml down` from `.local-ai/laya`.
+
 ### API keys
 
 | Model | Key for this setup |
@@ -146,7 +171,7 @@ Press **F2** for **Local AI Plays** or **F4** twice for **Odds vs Local AI**. In
 | [Local Kev](https://github.com/jaredpalmer/kev/blob/main/kev/serve.py) | No key by default; its server can optionally require `KEV_API_KEY` |
 | [Local Laya](https://github.com/NandhaKishorM/laya/blob/main/laya/serve.py) | No key by default; its server can optionally require `LAYA_API_KEY` |
 
-Kev's and Laya's optional keys protect **their own servers**; they are not TypeSafe keys. Hangman currently sends the fixed placeholder `Authorization: Bearer local` to a local server and has no setting for a different local server key. If local server authentication requires another key, Hangman gets HTTP 401. If you run Laya for local testing without a key, set `LAYA_HOST=127.0.0.1`: its documented default binds to all network interfaces.
+Kev's and Laya's optional keys protect **their own servers**; they are not TypeSafe keys. Hangman currently sends the fixed placeholder `Authorization: Bearer local` to a local server and has no setting for a different local server key. If local server authentication requires another key, Hangman gets HTTP 401. The Docker command above publishes Laya only on host loopback by default. If running Laya's Python server directly without Docker, set `LAYA_HOST=127.0.0.1` for local-only access; do not set that inside the Docker container, where it would prevent the published port from reaching the server.
 
 ### Check the local connection
 
@@ -181,15 +206,15 @@ The game does not retry a failed request. If a duel has stopped, press **Enter**
 
 ### Kev and Laya in a duel
 
-**Duel** is the game mode, not a model. It pits the built-in Odds solver against the local model selected when Hangman starts. The setup above runs **Odds vs Kev**. [Laya](https://github.com/NandhaKishorM/laya) is a different model family that can serve the same `/v1/systemone` request format; it is not installed or running in this project's local setup. The game does not currently offer a direct Kev vs Laya match.
+**Duel** is the game mode, not a model. It pits the built-in Odds solver against the local model selected when Hangman starts. The Kev setup runs **Odds vs Kev**; the Docker setup runs **Odds vs Laya**. [Laya](https://github.com/NandhaKishorM/laya) is a different model family that serves the same `/v1/systemone` request format. The game does not currently offer a direct Kev vs Laya match.
 
 | | Kev-0.8B used here | Laya |
 | --- | --- | --- |
 | Model | [Qwen3.5-0.8B base with a trained adapter and decision head](https://github.com/jaredpalmer/kev/blob/main/docs/model-cards/kev-0.8b.md) | [English ModernBERT and multilingual mmBERT checkpoints, selected by a router](https://github.com/NandhaKishorM/laya#readme) |
-| Hangman connection | The installed Kev server on port 8009 | Requires a separate Laya server and matching Hangman port setting |
+| Hangman connection | The installed Kev server on port 8009 | The Docker Laya server on port 8010, with `HANGMAN_LOCAL_MODEL_NAME=english` |
 | What the game does | Sends a Choice question over visible clues | Sends the same Choice question over visible clues |
 
-The two models may propose different letters, but neither is automatically stronger at Hangman. The game applies its local candidate-word correction to either model's proposal in normal rounds, so a duel result measures the model **with** that rule. The terminal's `model_pick` shows the model's original letter; `letter` shows the applied guess. A fair Kev versus Laya accuracy claim would need both models tested on the same words and clues. Laya has not been tested here.
+The two models may propose different letters, but neither is automatically stronger at Hangman. The game applies its local candidate-word correction to either model's proposal in normal rounds, so a duel result measures the model **with** that rule. The terminal's `model_pick` shows the model's original letter; `letter` shows the applied guess. A fair Kev versus Laya accuracy claim would need both models tested on the same words and clues. The Laya connection has passed one local turn, not an accuracy comparison.
 
 For normal rounds, the game checks the local model's proposed letter against the words still possible from visible clues. It first keeps the letters with the highest exact chance of a hit. For ties, it simulates each possible word and lets Odds finish the hypothetical round, then prefers more projected wins, fewer misses, and fewer turns. The model decides when those results tie. This prevents a guess like the earlier Kev trial's 3/11 letter when a 6/11 letter was available. The terminal reports `model_pick`, the applied `letter`, and the model's probability for its own pick; the status line says `CORRECTED` when they differ. The Odds vs Local AI duel now compares Odds against a model assisted by this visible-clue rule.
 
