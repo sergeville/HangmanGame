@@ -1,5 +1,7 @@
 # Hangman
 
+![Hangman game board with wooden letter tiles and a gallows](assets/bg.jpg)
+
 A Rust desktop Hangman game with 200 words arranged into ten approximate difficulty levels. Guess the hidden word before you run out of lives. For the probability model and decision-model boundaries, see [Hangman: Probability, Information Gain, and JeV](hangman_probability_and_jev.md).
 
 ## Install
